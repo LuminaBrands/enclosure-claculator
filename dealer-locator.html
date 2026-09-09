@@ -16,6 +16,13 @@
       } catch (e) {}
     })();
   </script>
+  <!-- Google Tag Manager -->
+  <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+  new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+  j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+  'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+  })(window,document,'script','dataLayer','GTM-K6Z2NC7Z');</script>
+  <!-- End Google Tag Manager -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -167,6 +174,10 @@
   </style>
 </head>
 <body>
+  <!-- Google Tag Manager (noscript) -->
+  <noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-K6Z2NC7Z"
+  height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+  <!-- End Google Tag Manager (noscript) -->
 
   <!-- Nav -->
   <div class="atmos" aria-hidden="true">
@@ -296,6 +307,33 @@
   // Only dealers with map coordinates
   var MAPPABLE = DEALERS.filter(function(d) { return d.lat != null && d.lng != null; });
 
+  // ─── Analytics ───
+  // Every locator interaction goes through track(): it pushes the event to
+  // this page's dataLayer (GTM-K6Z2NC7Z, loaded in <head>) and, when the page
+  // is running inside an iframe (?embed on a store or dealer page), also
+  // relays it to the host page with postMessage. The host's own GTM can then
+  // push it into its dataLayer -- see docs/embedding.md for the listener.
+  // The relay matters because a cross-origin iframe is a third party to the
+  // host: Safari/Firefox block its cookies and Chrome partitions them, so the
+  // GTM copy inside the frame fires but can't share the host's session.
+  // Payloads carry only what's in the public dealers.js plus the search text,
+  // so targetOrigin '*' leaks nothing; the host is whoever embedded us.
+  var IN_FRAME = (function () { try { return window.self !== window.top; } catch (e) { return true; } })();
+  function track(event, data) {
+    var payload = { event: event };
+    for (var k in data) if (data[k] != null) payload[k] = data[k];
+    try { (window.dataLayer = window.dataLayer || []).push(payload); } catch (e) {}
+    if (IN_FRAME) {
+      try {
+        var msg = { source: 'aquafire-dealer-locator', page: location.pathname };
+        for (var j in payload) msg[j] = payload[j];
+        window.parent.postMessage(msg, '*');
+      } catch (e) {}
+    }
+  }
+  // How the current result set was produced, so dealer_search can say so.
+  var searchMethod = 'auto';
+
   // ─── Helpers ───
   function haversine(a, b, c, d) {
     var R = 3959, p = Math.PI / 180;
@@ -391,6 +429,13 @@
 
     var helpMsg = ' Not what you\'re looking for? Try a new search or contact <a href="mailto:sales@aquafire.com">sales@aquafire.com</a> to locate a dealer near you.';
 
+    track('dealer_search', {
+      search_term: document.getElementById('q').value.trim() || undefined,
+      search_method: searchMethod,
+      result_count: dealers.length,
+      radius_mi: hasDist ? getMaxDistance() : undefined
+    });
+
     if (dealers.length === 0) {
       ct.innerHTML = 'No dealers found.' + helpMsg;
       return;
@@ -472,8 +517,9 @@
     closeAC();
     var q = document.getElementById('q').value.trim();
 
-    if (coords) { searchByCoords(coords); return; }
+    if (coords) { searchMethod = 'geolocate'; searchByCoords(coords); return; }
     if (!q) return;
+    searchMethod = 'text';
 
     // Search by name, address, city, type, country
     var lo = q.toLowerCase();
@@ -497,6 +543,7 @@
   }
 
   function geocodeAndSearch(q) {
+    searchMethod = 'geocode';
     fetch('https://nominatim.openstreetmap.org/search?format=json&countrycodes=us,ca&limit=1&q=' + encodeURIComponent(q))
       .then(function(r) { return r.json(); })
       .then(function(data) {
@@ -665,6 +712,7 @@
 
     // Show closest dealers to starting location
     function showNearest(coords) {
+      searchMethod = 'auto';
       lastCoords = coords;
       var nearby = nearestDealers(coords);
       buildCards(nearby, true);
@@ -685,6 +733,32 @@
         { enableHighAccuracy: false, timeout: 5000, maximumAge: 300000 }
       );
     }
+
+    // Phone / website / directions clicks, in the result cards and the map
+    // popups alike. Delegated, so re-rendered cards and Leaflet popups are
+    // covered without re-binding.
+    document.addEventListener('click', function(e) {
+      var a = e.target.closest && e.target.closest('a[href]');
+      if (!a) return;
+      var host = a.closest('.d-card') || a.closest('.leaflet-popup');
+      if (!host) return;
+      var href = a.getAttribute('href') || '';
+      var link = href.indexOf('tel:') === 0 ? 'phone'
+        : href.indexOf('google.com/maps') !== -1 ? 'directions'
+        : 'website';
+      var nameEl = host.querySelector('h3, strong, b');
+      var name = nameEl ? nameEl.textContent.trim() : '';
+      var d = null;
+      for (var k = 0; k < DEALERS.length; k++) if (DEALERS[k].name === name) { d = DEALERS[k]; break; }
+      track('dealer_click', {
+        link_type: link,
+        dealer_name: name || undefined,
+        dealer_type: d ? d.type : undefined,
+        dealer_country: d ? d.country : undefined,
+        link_url: link === 'website' ? href : undefined,
+        placement: host.classList.contains('d-card') ? 'card' : 'map_popup'
+      });
+    });
 
     var qEl = document.getElementById('q');
     document.getElementById('go').addEventListener('click', function() { search(); });
