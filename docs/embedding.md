@@ -104,6 +104,51 @@ it.
 The two internal pages (`chat-insights.html`, `dealer-admin.html`) carry
 `X-Frame-Options: DENY` and cannot be embedded at all, by design.
 
+## Analytics from an embedded Find a Dealer
+
+`dealer-locator.html` carries Google Tag Manager (container `GTM-K6Z2NC7Z`)
+and pushes two events to its `dataLayer`:
+
+| Event | Fired when | Fields |
+|-------|-----------|--------|
+| `dealer_search` | Every time the result list is built: page load (nearest to HQ or the visitor), a typed search, a geocoded city/ZIP, the location button | `search_term`, `search_method` (`auto` / `text` / `geocode` / `geolocate`), `result_count`, `radius_mi` (`0` = any distance; absent on name/type matches) |
+| `dealer_click` | A phone, website or directions link is clicked, in a result card or a map popup | `link_type` (`phone` / `website` / `directions`), `dealer_name`, `dealer_type`, `dealer_country`, `link_url`, `placement` (`card` / `map_popup`) |
+
+Inside an iframe the container still loads and fires, but the frame is a
+third party to the host page: Safari and Firefox block its cookies and Chrome
+partitions them, so GA4 sees a separate, short-lived session per embed and
+cannot join it to the host page's visitor. To keep the host's own analytics
+whole, the page also relays every event to the host with `postMessage`:
+
+```js
+{ source: 'aquafire-dealer-locator', page: '/dealer-locator.html', event: 'dealer_click', link_type: 'phone', dealer_name: '...', ... }
+```
+
+To pick those up on a host page that runs GTM, add this once to the host
+(a Custom HTML tag firing on All Pages works, or the theme's layout):
+
+```html
+<script>
+window.addEventListener('message', function (e) {
+  if (e.origin !== 'https://aquafire.app') return;
+  var m = e.data;
+  if (!m || m.source !== 'aquafire-dealer-locator' || !m.event) return;
+  var payload = {};
+  for (var k in m) if (k !== 'source') payload[k] = m[k];
+  (window.dataLayer = window.dataLayer || []).push(payload);
+});
+</script>
+```
+
+The host then sees `dealer_search` / `dealer_click` on its own `dataLayer`,
+with a `page` field marking where they came from, and can trigger tags on them
+exactly as it would for its own events. The origin check is what stops any
+other frame on the host page from pushing into its `dataLayer`; keep it.
+
+Geolocation in the frame needs the host to delegate it:
+`<iframe allow="geolocation" ...>`. Without it the location button and the
+auto-detect on load fail silently and results default to nearest HQ.
+
 ## The chat widget
 
 Ember hides itself under `?embed` so a host page that already runs the widget
