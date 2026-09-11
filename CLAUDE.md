@@ -21,7 +21,7 @@ How the site evolved and why settled decisions went the way they did: `docs/hist
 | `troubleshoot.html` | Interactive model-aware decision-tree Troubleshooter |
 | `help.html` | Help Center — article library (`help.js` engine + `help-articles.js` data + Firestore merge). Docs: `docs/help-center.md` |
 | `rewards.html` | Rewards programme page — tiers and earning modules |
-| `dealer-locator.html` | Find a Dealer map (Leaflet + Stadia Maps tiles), powered by the public `dealers.js`. Carries Google Tag Manager (`GTM-K6Z2NC7Z`, the only page with it — its CSP block in `vercel.json` allows the GTM/GA hosts); `track()` pushes `dealer_search`/`dealer_click` to `dataLayer` and relays them to the host page by `postMessage` under `?embed` (`docs/embedding.md`) |
+| `dealer-locator.html` | Find a Dealer map (Leaflet + Stadia Maps tiles), powered by the public `dealers.js`. Carries Google Tag Manager (`GTM-K6Z2NC7Z`, the only page with it — its CSP block in `vercel.json` allows the GTM/GA hosts); `track()` pushes `dealer_search_bar`/`dealer_search`/`dealer_click` to `dataLayer` and, in an iframe, relays them to the host page by `postMessage` (numbered, replayed on the bridge's `ready`) — `dealer-embed.js` is the host side (`docs/embedding.md`) |
 | `resources.html` | Download library (`resources.css`) — every professional resource grouped by model. Each model group is a **static mirror of its guide's `#resources` section** (add a download to a guide and add it here too) |
 | `share-install.html` | Photo submission → Firebase Storage (`installs/<uid>/`), awards the 500-pt `share-install` reward. Needs `docs/storage-rules.md` published |
 | `support.html` | Support hub — links Troubleshooter + storefront warranty (awards `register-warranty` on click-through); claims/FAQs cards are still `#` stubs |
@@ -64,6 +64,7 @@ How the site evolved and why settled decisions went the way they did: `docs/hist
 | `assistant.js` | **"Ember" chat widget** — self-contained single file (CSS injected, `afa-` prefixed), embeddable on Shopify with one script tag. Docs: `docs/chat-assistant.md` |
 | `admin-nav.js` | Shared admin header (deliberately pre-redesign look, so admin reads as a different surface) — nav links, per-page frontend action, auth-aware sign in/out, light/dark toggle. One `<script defer>` per admin page; each page keeps its own sign-in gate |
 | `embed.js` | Strips chrome when a page loads in an iframe (`?embed`) — see Gotchas |
+| `dealer-embed.js` | **Public, loaded by the Shopify store** (one tag next to the Find a Dealer iframe) — receives the locator's relayed analytics events and pushes them into the host page's `dataLayer`; origin-checked, seq de-duplicated. Pure ASCII like `assistant.js`. Protocol and install: `docs/embedding.md` |
 | `beam.js` | Border Beam controller — `docs/border-beam.md` |
 
 ### API (Vercel serverless, `api/`)

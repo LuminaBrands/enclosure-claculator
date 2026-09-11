@@ -311,25 +311,47 @@
   // Every locator interaction goes through track(): it pushes the event to
   // this page's dataLayer (GTM-K6Z2NC7Z, loaded in <head>) and, when the page
   // is running inside an iframe (?embed on a store or dealer page), also
-  // relays it to the host page with postMessage. The host's own GTM can then
-  // push it into its dataLayer -- see docs/embedding.md for the listener.
+  // relays it to the host page with postMessage, where dealer-embed.js pushes
+  // it into the host's own dataLayer -- see docs/embedding.md.
   // The relay matters because a cross-origin iframe is a third party to the
   // host: Safari/Firefox block its cookies and Chrome partitions them, so the
   // GTM copy inside the frame fires but can't share the host's session.
+  //
+  // Handshake: every relayed message carries a running `seq`, and the last
+  // 100 are kept in relayLog. The host bridge answers the first message it
+  // sees (or our `hello` on load) with `ready`; on `ready` we replay the log,
+  // so events fired before the bridge loaded (GTM injects it after page
+  // load, the frame's first dealer_search can beat it) still arrive. The
+  // bridge de-duplicates by seq, so a replay never double-counts.
   // Payloads carry only what's in the public dealers.js plus the search text,
-  // so targetOrigin '*' leaks nothing; the host is whoever embedded us.
+  // so targetOrigin '*' leaks nothing until the host has identified itself;
+  // after `ready` we address it by its origin.
   var IN_FRAME = (function () { try { return window.self !== window.top; } catch (e) { return true; } })();
+  var RELAY_SOURCE = 'aquafire-dealer-locator';
+  var relaySeq = 0, relayLog = [], hostOrigin = '*';
+  function relay(msg) {
+    if (!IN_FRAME) return;
+    try { window.parent.postMessage(msg, hostOrigin); } catch (e) {}
+  }
   function track(event, data) {
     var payload = { event: event };
     for (var k in data) if (data[k] != null) payload[k] = data[k];
     try { (window.dataLayer = window.dataLayer || []).push(payload); } catch (e) {}
-    if (IN_FRAME) {
-      try {
-        var msg = { source: 'aquafire-dealer-locator', page: location.pathname };
-        for (var j in payload) msg[j] = payload[j];
-        window.parent.postMessage(msg, '*');
-      } catch (e) {}
-    }
+    if (!IN_FRAME) return;
+    var msg = { source: RELAY_SOURCE, type: 'event', seq: ++relaySeq, page: location.pathname };
+    for (var j in payload) msg[j] = payload[j];
+    relayLog.push(msg);
+    if (relayLog.length > 100) relayLog.shift();
+    relay(msg);
+  }
+  if (IN_FRAME) {
+    window.addEventListener('message', function (e) {
+      var m = e.data;
+      if (e.source !== window.parent || !m || m.source !== RELAY_SOURCE + '-host' || m.type !== 'ready') return;
+      hostOrigin = e.origin || '*';
+      for (var i = 0; i < relayLog.length; i++) relay(relayLog[i]);
+    });
+    relay({ source: RELAY_SOURCE, type: 'hello', seq: 0, page: location.pathname });
   }
   // How the current result set was produced, so dealer_search can say so.
   var searchMethod = 'auto';
@@ -513,12 +535,15 @@
     showOnMap(nearby, coords);
   }
 
-  function search(coords) {
+  function search(coords, trigger) {
     closeAC();
     var q = document.getElementById('q').value.trim();
 
     if (coords) { searchMethod = 'geolocate'; searchByCoords(coords); return; }
     if (!q) return;
+    // One event per search-bar submission, whatever the text turns out to be
+    // (dealer name, city, ZIP, street). dealer_search follows with the count.
+    track('dealer_search_bar', { search_term: q, search_trigger: trigger || 'button' });
     searchMethod = 'text';
 
     // Search by name, address, city, type, country
@@ -587,7 +612,7 @@
         e.preventDefault();
         document.getElementById('q').value = d.name;
         closeAC();
-        search();
+        search(null, 'suggestion');
       });
       el.appendChild(div);
     });
@@ -608,6 +633,8 @@
             e.preventDefault();
             document.getElementById('q').value = parts.slice(0, 2).join(', ');
             closeAC();
+            track('dealer_search_bar', { search_term: parts.slice(0, 2).join(', '), search_trigger: 'suggestion' });
+            searchMethod = 'geocode';
             searchByCoords([parseFloat(item.lat), parseFloat(item.lon)]);
           });
           el.appendChild(div);
@@ -761,10 +788,10 @@
     });
 
     var qEl = document.getElementById('q');
-    document.getElementById('go').addEventListener('click', function() { search(); });
+    document.getElementById('go').addEventListener('click', function() { search(null, 'button'); });
     qEl.addEventListener('keydown', function(e) {
       onACKey(e);
-      if (e.key === 'Enter' && acIdx < 0) search();
+      if (e.key === 'Enter' && acIdx < 0) search(null, 'enter');
     });
     qEl.addEventListener('input', onInput);
     qEl.addEventListener('focus', function() { if (qEl.value === 'My Location') qEl.value = ''; });
