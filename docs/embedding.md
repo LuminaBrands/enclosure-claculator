@@ -107,43 +107,55 @@ The two internal pages (`chat-insights.html`, `dealer-admin.html`) carry
 ## Analytics from an embedded Find a Dealer
 
 `dealer-locator.html` carries Google Tag Manager (container `GTM-K6Z2NC7Z`)
-and pushes two events to its `dataLayer`:
+and pushes three events to its `dataLayer`:
 
 | Event | Fired when | Fields |
 |-------|-----------|--------|
-| `dealer_search` | Every time the result list is built: page load (nearest to HQ or the visitor), a typed search, a geocoded city/ZIP, the location button | `search_term`, `search_method` (`auto` / `text` / `geocode` / `geolocate`), `result_count`, `radius_mi` (`0` = any distance; absent on name/type matches) |
+| `dealer_search_bar` | The visitor submits the search bar: Search button, Enter, or picking a suggestion. One event per submission whatever the text is (dealer name, city, ZIP, street) | `search_term`, `search_trigger` (`button` / `enter` / `suggestion`) |
+| `dealer_search` | Every time the result list is built: page load (nearest to HQ or the visitor), a search-bar submission, the location button | `search_term`, `search_method` (`auto` / `text` / `geocode` / `geolocate`), `result_count`, `radius_mi` (`0` = any distance; absent on name/type matches) |
 | `dealer_click` | A phone, website or directions link is clicked, in a result card or a map popup | `link_type` (`phone` / `website` / `directions`), `dealer_name`, `dealer_type`, `dealer_country`, `link_url`, `placement` (`card` / `map_popup`) |
+
+### Inside an iframe: install the bridge on the host page
 
 Inside an iframe the container still loads and fires, but the frame is a
 third party to the host page: Safari and Firefox block its cookies and Chrome
 partitions them, so GA4 sees a separate, short-lived session per embed and
-cannot join it to the host page's visitor. To keep the host's own analytics
-whole, the page also relays every event to the host with `postMessage`:
+cannot join it to the host page's visitor. **The host's own Tag Assistant
+also only shows the host page's `dataLayer`, so without the bridge the
+events never appear there.**
 
-```js
-{ source: 'aquafire-dealer-locator', page: '/dealer-locator.html', event: 'dealer_click', link_type: 'phone', dealer_name: '...', ... }
-```
-
-To pick those up on a host page that runs GTM, add this once to the host
-(a Custom HTML tag firing on All Pages works, or the theme's layout):
+The page relays every event to its parent with `postMessage`, and
+`dealer-embed.js` (served from this repo) receives them and pushes them into
+the host page's `dataLayer`. Add it once to the host page, anywhere after
+`<body>`:
 
 ```html
-<script>
-window.addEventListener('message', function (e) {
-  if (e.origin !== 'https://aquafire.app') return;
-  var m = e.data;
-  if (!m || m.source !== 'aquafire-dealer-locator' || !m.event) return;
-  var payload = {};
-  for (var k in m) if (k !== 'source') payload[k] = m[k];
-  (window.dataLayer = window.dataLayer || []).push(payload);
-});
-</script>
+<script src="https://aquafire.app/dealer-embed.js" async></script>
 ```
 
-The host then sees `dealer_search` / `dealer_click` on its own `dataLayer`,
-with a `page` field marking where they came from, and can trigger tags on them
-exactly as it would for its own events. The origin check is what stops any
-other frame on the host page from pushing into its `dataLayer`; keep it.
+Three places that work on the store, pick one:
+
+- the same Custom HTML section as the iframe (`templates/page.dealer-inquiry.json`
+  holds the Find a Dealer embed) — simplest, right next to the frame;
+- `layout/theme.liquid`, next to the `assistant.js` tag it already loads;
+- a GTM Custom HTML tag on All Pages (the script no-ops on pages without a
+  locator frame).
+
+The host's GTM then sees `dealer_search_bar` / `dealer_search` /
+`dealer_click` as ordinary custom events, each with a `page` field
+(`/dealer-locator.html`) marking where it came from. In GTM: create a Custom
+Event trigger per event name and Data Layer Variables for the fields
+(`search_term`, `link_type`, `dealer_name`, …) to pass to GA4 event tags.
+
+How it stays correct: the frame numbers its messages and keeps the last 100;
+the bridge answers the frame's `hello` (or the first event it sees) with
+`ready`, and the frame replays anything sent before the bridge was listening
+(GTM injects the tag after page load, so the frame's first `dealer_search`
+usually beats it). The bridge de-duplicates by sequence number, so a replay
+never double-counts. The bridge accepts messages from `https://aquafire.app`
+only (override with `data-origin` on the script tag to test against a
+preview deployment), which is what stops any other frame on the host page
+from pushing into its `dataLayer`.
 
 Geolocation in the frame needs the host to delegate it:
 `<iframe allow="geolocation" ...>`. Without it the location button and the
